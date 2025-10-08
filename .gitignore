@@ -1,0 +1,36 @@
+# Laravel / PHP
+/vendor/
+composer.lock
+/.idea/
+/.phpunit.result.cache
+/.php-cs-fixer.cache
+
+# Env & keys
+.env
+.env.*.local
+.phpunit.*.xml
+
+# Node / build
+/node_modules/
+public/hot
+public/build
+/public/storage
+/.vite
+/.vite-inspect
+npm-debug.log*
+yarn-error.log
+
+# Laravel storage (keep public symlink)
+storage/*
+!storage/app/
+!storage/app/public/
+!storage/framework/
+!storage/framework/cache/
+!storage/framework/sessions/
+!storage/framework/views/
+!storage/logs/
+
+# OS
+.DS_Store
+Thumbs.db
+text=auto eol=lf
