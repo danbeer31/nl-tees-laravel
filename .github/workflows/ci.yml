@@ -1,20 +1,40 @@
-name: CI
-
-on:
-  push:
-    branches: [ master, dev ]
-  pull_request:
-    branches: [ master, dev ]
-
 jobs:
-  php:
+  php:  # unchanged
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.2'
+        with: { php-version: '8.2' }
       - run: composer install --no-interaction --prefer-dist
       - run: php -v
 
+  node:
+    if: ${{ hashFiles('package.json') != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
+      # with cache only if lockfile exists
+      - name: Setup Node (cached)
+        if: ${{ hashFiles('package-lock.json') != '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Node (no cache)
+        if: ${{ hashFiles('package-lock.json') == '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install
+        if: ${{ hashFiles('package-lock.json') != '' }}
+        run: npm ci
+
+      - name: Install (no lockfile)
+        if: ${{ hashFiles('package-lock.json') == '' }}
+        run: npm install
+
+      - run: npm run build --if-present
