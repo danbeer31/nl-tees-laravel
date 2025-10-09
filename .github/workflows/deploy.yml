@@ -1,7 +1,8 @@
 name: Build & Deploy NL-Tees (Laravel)
 on:
   push:
-    branches: [ main ]
+    branches: [ master ]   # not main
+  workflow_dispatch:
 
 jobs:
   deploy:
