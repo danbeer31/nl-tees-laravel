@@ -21,7 +21,28 @@ class SupplierCatalogController extends Controller
     /* =========================
      * S&S Activewear (styleID + CDN image via SsService)
      * ========================= */
+    public function index(Request $r)
+    {
+        $q = trim((string)$r->query('q',''));
 
+        $products = Product::query()
+            ->when($q, function ($qq) use ($q) {
+                $qq->where('title', 'ILIKE', "%{$q}%")
+                    ->orWhere('slug', 'ILIKE', "%{$q}%")
+                    ->orWhere('supplier', 'ILIKE', "%{$q}%");
+            })
+            ->withCount('colors')
+            ->with(['colors' => fn($qc) => $qc->withCount('sizes')])
+            ->orderByDesc('created_at')
+            ->paginate(20)
+            ->withQueryString();
+
+        return view('admin.suppliers.catalog.index', [
+            'Title'    => 'Catalog',
+            'q'        => $q,
+            'products' => $products,
+        ]);
+    }
     /** GET /admin/catalog/ss?search=... */
     public function ssIndex(Request $r, SsService $ss)
     {

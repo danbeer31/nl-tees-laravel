@@ -75,24 +75,30 @@
                 <div class="mb-3">
                     <label for="size-select" class="form-label fw-semibold">Size</label>
                     <select id="size-select" class="form-select"
-                        @disabled(!$firstColor || !$firstColor->sizes || $firstColor->sizes->isEmpty())>
-                        @if($firstColor && $firstColor->sizes && $firstColor->sizes->count())
-                            @foreach($firstColor->sizes as $s)
-                                <option value="{{ $s->id }}"
-                                        data-price-delta="{{ (float)($s->price_difference ?? 0) }}"
-                                    @disabled(isset($s->in_stock) && !$s->in_stock)>
-                                    {{ $s->name }}
-                                    @if(($s->price_difference ?? 0) != 0)
-                                        ({{ $s->price_difference > 0 ? '+' : '' }}${{ number_format($s->price_difference,2) }})
-                                    @endif
-                                    @if(isset($s->in_stock) && !$s->in_stock) — Out of stock @endif
-                                </option>
-                            @endforeach
-                        @else
+                        @disabled(!$firstColor || $firstColor->sizes->isEmpty())>
+                        @forelse($firstColor?->sizes ?? [] as $s)
+                            @php
+                                $label      = $s->label ?? $s->name ?? 'Size';
+                                $deltaCents = (int)($s->pivot->price_diff_cents ?? 0);
+                                $delta      = $deltaCents / 100;
+                                $inStock    = is_null($s->pivot->stock_qty) ? true : ($s->pivot->stock_qty > 0);
+                            @endphp
+                            <option value="{{ $s->id }}"
+                                    data-price-delta-cents="{{ $deltaCents }}"
+                                    data-price-delta="{{ number_format($delta, 2, '.', '') }}"
+                                @disabled(!$inStock)>
+                                {{ $label }}
+                                @if($deltaCents !== 0)
+                                    ({{ $deltaCents > 0 ? '+' : '' }}${{ number_format($delta, 2) }})
+                                @endif
+                                @unless($inStock) — Out of stock @endunless
+                            </option>
+                        @empty
                             <option value="">Select a color first</option>
-                        @endif
+                        @endforelse
                     </select>
                 </div>
+
 
                 {{-- Qty + actions --}}
                 <div class="mb-3">
