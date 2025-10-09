@@ -1,6 +1,6 @@
 # NL-Tees (Laravel)
 
-A Laravel app for nl-tees.com.
+A Laravel app for nl-tees.com. 
 
 ## Requirements
 - PHP 8.2+
