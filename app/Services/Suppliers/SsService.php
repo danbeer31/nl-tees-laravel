@@ -93,17 +93,18 @@ class SsService
     public function normalizeForImport(array $variants, string $styleID, array $meta = []): array
     {
         $first = $variants[0] ?? [];
+
         $brand = $first['brandName'] ?? ($first['brand'] ?? ($meta['brandName'] ?? ($meta['brand'] ?? '')));
-        $title = $first['brandName'].' '.$meta['title'];
-        $style = $first['styleName'] ?? ($first['style'] ?? ($meta['styleName'] ?? ($meta['style'] ?? '')));
-        $img = $this->pickImageUrl($first);
-        $slug  = Str::slug(trim($brand.' '.$style.' '.$styleID));
-        // Build description from meta (best-effort)
+        $style = $first['styleName'] ?? ($first['style'] ?? ($meta['styleName'] ?? ($meta['style'] ?? (string)$styleID)));
+        $title = trim((string)($meta['title'] ?? $first['title'] ?? "$brand $style"));
+
+        $slug  = Str::slug(trim("$brand $style $styleID"));
+        $img   = $this->pickImageUrl($first);
+
+        // Description
         $descPieces = [];
         foreach (['description','catalogDescription','styleDescription','features','feature','fabric','material'] as $k) {
-            if (!empty($meta[$k])) {
-                $descPieces[] = is_array($meta[$k]) ? implode(', ', $meta[$k]) : (string)$meta[$k];
-            }
+            if (!empty($meta[$k])) $descPieces[] = is_array($meta[$k]) ? implode(', ', $meta[$k]) : (string)$meta[$k];
         }
         $description = trim(implode("\n\n", array_filter($descPieces)));
 
@@ -112,52 +113,114 @@ class SsService
         foreach ($variants as $v) {
             if (!is_array($v)) continue;
 
-            $colorCode = $v['colorCode'] ?? ($v['color'] ?? ($v['colorName'] ?? 'UNKNOWN'));
-            $colorName = $v['colorName'] ?? (is_string($colorCode) ? $colorCode : 'Color');
+            $colorCode = (string)($v['colorCode'] ?? $v['color'] ?? $v['colorName'] ?? 'UNKNOWN');
+            $colorName = (string)($v['colorName'] ?? $colorCode);
             $hex       = $this->sanitizeHex($v['color1'] ?? ($v['hex'] ?? null));
-            $colorImg  = $this->pickImageUrl($v);
 
-            $sizeName = $v['size'] ?? ($v['sizeName'] ?? ($v['label'] ?? null));
             if (!isset($byColor[$colorCode])) {
                 $byColor[$colorCode] = [
-                    'name'  => $colorName,
-                    'hex'   => $hex,
-                    'image' => $colorImg,
-                    'sizes' => [],
+                    'name'   => $colorName,
+                    'hex'    => $hex,
+                    'images' => [],   // will be array of {path,alt,sort_order,is_primary,meta?}
+                    '_seen'  => [],   // dedupe helper
+                    'sizes'  => [],
                 ];
+            } elseif ($hex && empty($byColor[$colorCode]['hex'])) {
+                $byColor[$colorCode]['hex'] = $hex;
             }
 
+            // collect images from this variant
+            foreach ($this->collectImages($v, $title, $colorName) as $obj) {
+                $u = $obj['path'];
+                if (isset($byColor[$colorCode]['_seen'][$u])) continue;
+                $byColor[$colorCode]['_seen'][$u] = true;
+
+                $obj['sort_order'] = count($byColor[$colorCode]['images']) + 1;
+                $obj['is_primary'] = $obj['sort_order'] === 1;
+                $byColor[$colorCode]['images'][] = $obj;
+            }
+
+            // sizes
+            $sizeName = $v['size'] ?? ($v['sizeName'] ?? ($v['label'] ?? null));
             if ($sizeName) {
-                $byColor[$colorCode]['sizes'][(string)$sizeName] = [
-                    'label'            => (string)$sizeName,
+                $label = (string)$sizeName;
+                $byColor[$colorCode]['sizes'][$label] = [
+                    'label'            => $label,
                     'price_diff_cents' => 0,
                     'stock_qty'        => isset($v['qty']) ? (int)$v['qty'] : null,
                     'sku'              => $v['sku'] ?? ($v['upc'] ?? null),
-                    'sort_order'       => $this->sizeOrder((string)$sizeName),
+                    'sort_order'       => $this->sizeOrder($label),
                 ];
             }
         }
 
-        // Flatten + sort sizes; then sort colors
+        // Normalize arrays and back-compat 'image' field
         $colors = [];
         foreach ($byColor as $c) {
-            $sizes = array_values($c['sizes']);
-            usort($sizes, fn($a,$b) => ($a['sort_order'] <=> $b['sort_order']) ?: strcmp($a['label'], $b['label']));
-            $c['sizes'] = $sizes;
+            unset($c['_seen']);
+            $c['sizes']  = array_values($c['sizes']);
+            usort($c['sizes'], fn($a,$b)=>($a['sort_order']<=>$b['sort_order']) ?: strcmp($a['label'],$b['label']));
+            $c['images'] = array_values($c['images']);
+            $c['image']  = $c['images'][0]['path'] ?? null; // optional legacy field
             $colors[] = $c;
         }
-        usort($colors, fn($a,$b) => strcmp($a['name'], $b['name']));
+        usort($colors, fn($a,$b)=>strcmp($a['name'],$b['name']));
 
         return [
             'title'            => $title,
             'slug'             => $slug,
             'base_price_cents' => 0,
-            'description'      => ($description !== '') ? $description : null,
-            'supplier'         => 's&s_products',   // <<< ensure supplier is S&S
+            'description'      => $description !== '' ? $description : null,
+            'supplier'         => 's&s_products',
             'image'            => $img,
             'colors'           => $colors,
         ];
     }
+
+    /** Build image objects from a variant row */
+    private function collectImages(array $row, string $title = '', string $colorName = ''): array
+    {
+        $urls = [];
+
+        // main candidates
+        foreach (['styleImage','colorFrontImage','colorSideImage','colorBackImage','image','frontImage'] as $f) {
+            if (!empty($row[$f])) $urls[] = $this->cdnUrl($row[$f]);
+        }
+        // swatch-like fields (if present) tagged in meta
+        $swatch = null;
+        foreach (['swatchImage','colorSwatchImage','swatch'] as $f) {
+            if (!empty($row[$f])) { $swatch = $this->cdnUrl($row[$f]); break; }
+        }
+
+        // dedupe while building objects
+        $out = [];
+        $seen = [];
+        $i = 0;
+        foreach ($urls as $u) {
+            if (!$u || isset($seen[$u])) continue;
+            $seen[$u] = true;
+            $i++;
+            $out[] = [
+                'path'       => $u,
+                'alt'        => trim($title ? "$title - $colorName" : $colorName),
+                'sort_order' => $i,
+                'is_primary' => $i === 1,
+            ];
+        }
+
+        if ($swatch && !isset($seen[$swatch])) {
+            $out[] = [
+                'path'       => $swatch,
+                'alt'        => trim($title ? "$title - $colorName swatch" : "$colorName swatch"),
+                'sort_order' => count($out) + 1,
+                'is_primary' => false,
+                'meta'       => ['type' => 'swatch'],
+            ];
+        }
+
+        return $out;
+    }
+
 
     /* =============== helpers =============== */
 

@@ -24,4 +24,15 @@ class ProductColor extends Model
             ->orderBy('product_color_sizes.sort_order')
             ->orderBy('sizes.sort_order');
     }
+    // app/Models/ProductColor.php
+    public function images()
+    {
+        return $this->hasMany(\App\Models\ProductColorImage::class)
+            ->orderBy('sort_order');
+    }
+
+    public function primaryImage()
+    {
+        return $this->hasOne(\App\Models\ProductColorImage::class)->where('is_primary', true);
+    }
 }
