@@ -1,89 +1,79 @@
-name: Deploy
-
+name: Build & Deploy NL-Tees (Laravel)
 on:
   push:
-    branches: [ master ]
+    branches: [ main ]
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # PHP deps (prod only)
-      - uses: shivammathur/setup-php@v2
-        with: { php-version: '8.2' }
-      - run: composer install --no-dev --optimize-autoloader --prefer-dist
-
-      # Node build (Bootstrap assets)
-      - uses: actions/setup-node@v4
-        with: { node-version: '18', cache: 'npm' }
-      - run: npm ci
-      - run: npm run build
-
-      # Pack deploy bundle (no tests, no node_modules)
-      - name: Create artifact
-        run: |
-          tar -czf deploy.tgz \
-            --exclude='.git' \
-            --exclude='node_modules' \
-            --exclude='tests' \
-            --exclude='.github' \
-            --exclude='.env' \
-            .
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: deploy
-          path: deploy.tgz
-
   deploy:
-    needs: build
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/download-artifact@v4
-        with: { name: deploy, path: . }
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      # Upload bundle
-      - name: Copy to server (scp)
-        uses: appleboy/scp-action@v0.1.7
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT }}
-          source: "deploy.tgz"
-          target: "${{ secrets.DEPLOY_PATH }}"
+          php-version: '8.3'
+          extensions: mbstring, intl, gd, pdo_pgsql, bcmath, curl, fileinfo
+          tools: composer:v2
+          coverage: none
 
-      # Unpack + swap release + optimize
-      - name: Deploy steps (ssh)
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Composer install (prod)
+        run: composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT }}
-          script: |
-            set -e
-            cd "${{ secrets.DEPLOY_PATH }}"
-            mkdir -p releases shared/storage
-            ts=$(date +%Y%m%d%H%M%S)
-            mkdir "releases/$ts"
-            tar -xzf deploy.tgz -C "releases/$ts"
-            # persistent storage
-            rm -rf "releases/$ts/storage"
-            ln -sfn "${{ secrets.DEPLOY_PATH }}/shared/storage" "releases/$ts/storage"
-            # env file (must already exist in shared/.env)
-            ln -sfn "${{ secrets.DEPLOY_PATH }}/shared/.env" "releases/$ts/.env"
-            # point current -> new
-            ln -sfn "releases/$ts" current
-            # webroot should serve current/public
-            ln -sfn "${{ secrets.DEPLOY_PATH }}/current/public" "${{ secrets.WEBROOT_PATH }}"
+          node-version: '20'
 
-            cd current
-            php artisan config:clear
-            php artisan route:clear
-            php artisan view:clear
-            php artisan migrate --force || true
-            php artisan optimize
+      - name: NPM ci & build
+        run: |
+          npm ci
+          npm run build
 
+      - name: App artifacts
+        run: |
+          mkdir -p deploy
+          rsync -a \
+            --exclude=".git" \
+            --exclude="node_modules" \
+            --exclude="tests" \
+            --exclude=".github" \
+            --exclude="storage/logs/*" \
+            --exclude="storage/framework/cache/*" \
+            --exclude="storage/framework/sessions/*" \
+            --exclude="storage/framework/views/*" \
+            ./ deploy/current/
+          printf "%s" "${{ secrets.ENV_PROD }}" > deploy/current/.env
+
+      - name: Add SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_KEY }}
+
+      - name: Add host to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "${{ secrets.SSH_PORT }}" "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Rsync to server
+        run: |
+          rsync -az --delete \
+            -e "ssh -p ${{ secrets.SSH_PORT }}" \
+            deploy/current/ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.DEPLOY_PATH }}/current/
+
+      - name: Post-deploy (remote)
+        run: |
+          ssh -p "${{ secrets.SSH_PORT }}" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} <<'SSH'
+          set -e
+          cd "${{ secrets.DEPLOY_PATH }}/current"
+          php artisan storage:link || true
+          chmod -R ug+rw storage bootstrap/cache
+          php artisan config:cache
+          php artisan route:cache || true
+          php artisan view:cache || true
+          php artisan migrate --force
+          php artisan queue:restart || true
+          # sudo systemctl reload php8.3-fpm || true
+          SSH
