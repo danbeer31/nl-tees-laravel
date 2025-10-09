@@ -9,7 +9,7 @@ A Laravel app for nl-tees.com.
 - npm or yarn
 - Database (MySQL or PostgreSQL)
 - Redis (optional, for cache/queue)
-- OpenSSL / ext-intl / ext-mbstring / ext-pdo
+- OpenSSL / ext-intl / ext-mbstring / ext-pdo  
 
 ## Setup
 ```bash
