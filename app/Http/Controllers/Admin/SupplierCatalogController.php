@@ -10,9 +10,11 @@ use Illuminate\Support\Str;
 use App\Models\Product;
 use App\Models\ProductColor;
 use App\Models\Size;
+use App\Models\ProductColorImage; // add
 
 use App\Services\Suppliers\SanmarService;
 use App\Services\Suppliers\SsService;
+
 
 class SupplierCatalogController extends Controller
 {
@@ -123,11 +125,23 @@ class SupplierCatalogController extends Controller
             $colorName = ($row['colorInfo']['productColorName'] ?? '') ?: ($row['colorInfo']['colorName'] ?? '');
             if ($colorName === '') continue;
 
-            $sizeLabel = $row['sizeInfo']['size'] ?? null;
-
             if (!isset($colorsByName[$colorName])) {
-                $colorsByName[$colorName] = ['name'=>$colorName,'hex'=>null,'sizes'=>[]];
+                $colorsByName[$colorName] = ['name'=>$colorName,'hex'=>null,'sizes'=>[], 'images'=>[]];
             }
+
+            // collect any image urls we can find
+            $cands = [
+                $row['imageInfo']['imageUrl'] ?? null,
+                $row['colorInfo']['colorImage'] ?? null,
+                $row['colorInfo']['colorSwatchImage'] ?? null,
+            ];
+            foreach ($cands as $u) {
+                if (is_string($u) && $u !== '') {
+                    $colorsByName[$colorName]['images'][] = ['path'=>$u];
+                }
+            }
+
+            $sizeLabel = $row['sizeInfo']['size'] ?? null;
             if ($sizeLabel) {
                 $colorsByName[$colorName]['sizes'][$sizeLabel] = ['label'=>$sizeLabel, 'price_diff_cents'=>0];
             }
@@ -139,10 +153,10 @@ class SupplierCatalogController extends Controller
         }, array_values($colorsByName));
 
         return [
-            'title'             => $title,
-            'slug'              => $slug,
-            'base_price_cents'  => 0,
-            'colors'            => $colors,
+            'title'            => $title,
+            'slug'             => $slug,
+            'base_price_cents' => 0,
+            'colors'           => $colors,
         ];
     }
 
@@ -159,38 +173,35 @@ class SupplierCatalogController extends Controller
                     'title'            => $data['title'],
                     'description'      => $data['description'] ?? null,
                     'base_price_cents' => $data['base_price_cents'] ?? 0,
-                    'supplier'         => $data['supplier'] ?? null, // might be ignored if not fillable
-                    'image_url'        => $data['image'] ?? null,
+                    'supplier'         => $data['supplier'] ?? null,
+                    'image_url'        => $data['image'] ?? ($data['images'][0]['path'] ?? $data['images'][0]['url'] ?? null),
                     'active'           => true,
                 ]
             );
-// ✅ Force supplier to the incoming value even if fillable/observers set something else
             if (!empty($data['supplier']) && $product->supplier !== $data['supplier']) {
                 $product->supplier = $data['supplier'];
                 $product->save();
             }
 
-            // Colors
+            // Colors + sizes + images
             $sort = 1;
             foreach ($data['colors'] as $c) {
                 /** @var ProductColor $color */
                 $color = $product->colors()->updateOrCreate(
                     ['name' => $c['name']],
                     [
-                        'hex'               => $c['hex'] ?? null,
-                        'sort_order'        => $sort++,
-                        'price_diff_cents'  => $c['price_diff_cents'] ?? 0,
-                        // If you have a column for image url on colors, map it here:
-                        // 'image_url'      => $c['image'] ?? null,
+                        'hex'              => $c['hex'] ?? null,
+                        'sort_order'       => $sort++,
+                        'price_diff_cents' => $c['price_diff_cents'] ?? 0,
                     ]
                 );
 
-                // Sizes (master table + pivot)
+                // Sizes (master + pivot)
                 $i = 1;
                 foreach ($c['sizes'] as $s) {
                     $size = Size::firstOrCreate(
                         ['label' => $s['label']],
-                        ['sort_order' => $i] // used if creating new size labels
+                        ['sort_order' => $i]
                     );
 
                     $color->sizes()->syncWithoutDetaching([
@@ -204,9 +215,37 @@ class SupplierCatalogController extends Controller
                     ]);
                     $i++;
                 }
+
+                // Images for this color
+                if (!empty($c['images']) && is_array($c['images'])) {
+                    $order = 1;
+                    foreach ($c['images'] as $img) {
+                        $path = is_array($img) ? ($img['path'] ?? $img['url'] ?? null) : $img;
+                        if (!$path) continue;
+
+                        $color->images()->updateOrCreate(
+                            ['path' => $path],
+                            [
+                                'alt'        => is_array($img) ? ($img['alt'] ?? null) : null,
+                                'sort_order' => is_array($img) ? ($img['sort_order'] ?? $order) : $order,
+                                'is_primary' => (bool) (is_array($img) ? ($img['is_primary'] ?? ($order === 1)) : ($order === 1)),
+                                'meta'       => is_array($img) ? ($img['meta'] ?? null) : null,
+                            ]
+                        );
+                        $order++;
+                    }
+                    // set product hero if missing
+                    if (empty($product->image_url)) {
+                        $first = $color->images()->orderBy('is_primary','desc')->orderBy('sort_order')->first();
+                        if ($first) {
+                            $product->image_url = $first->path;
+                            $product->save();
+                        }
+                    }
+                }
             }
 
-            return $product->fresh(['colors','colors.sizes']);
+            return $product->fresh(['colors.images','colors.sizes']);
         });
     }
 }
