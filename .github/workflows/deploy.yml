@@ -6,35 +6,30 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
           extensions: mbstring, intl, gd, pdo_pgsql, bcmath, curl, fileinfo
           tools: composer:v2
-          coverage: none
 
       - name: Composer install (prod)
         run: composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: NPM ci & build
+      - name: Build assets
         run: |
           npm ci
           npm run build
 
-      - name: App artifacts
+      - name: Stage artifacts
         run: |
-          mkdir -p deploy
+          mkdir -p deploy/current
           rsync -a \
             --exclude=".git" \
             --exclude="node_modules" \
@@ -47,33 +42,32 @@ jobs:
             ./ deploy/current/
           printf "%s" "${{ secrets.ENV_PROD }}" > deploy/current/.env
 
-      - name: Add SSH key
+      - name: SSH key
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_KEY }}
 
-      - name: Add host to known_hosts
+      - name: known_hosts
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -p "${{ secrets.SSH_PORT }}" "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Rsync to server
+      - name: Rsync to shared host
         run: |
           rsync -az --delete \
             -e "ssh -p ${{ secrets.SSH_PORT }}" \
             deploy/current/ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.DEPLOY_PATH }}/current/
 
-      - name: Post-deploy (remote)
+      - name: Post-deploy (artisan)
         run: |
           ssh -p "${{ secrets.SSH_PORT }}" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} <<'SSH'
           set -e
           cd "${{ secrets.DEPLOY_PATH }}/current"
-          php artisan storage:link || true
-          chmod -R ug+rw storage bootstrap/cache
-          php artisan config:cache
-          php artisan route:cache || true
-          php artisan view:cache || true
-          php artisan migrate --force
-          php artisan queue:restart || true
-          # sudo systemctl reload php8.3-fpm || true
+          # Adjust php path if needed: /usr/bin/php or /opt/alt/php83/usr/bin/php
+          PHP_BIN=${PHP_BIN:-php}
+          $PHP_BIN artisan storage:link || true
+          $PHP_BIN artisan config:cache
+          $PHP_BIN artisan route:cache || true
+          $PHP_BIN artisan view:cache || true
+          $PHP_BIN artisan migrate --force || true
           SSH
