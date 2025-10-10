@@ -9,6 +9,10 @@ class Product extends Model
     protected $fillable = [
         'title','slug','description','image_url','base_price_cents','supplier','active'
     ];
+    public function images(): HasMany
+    {
+        return $this->hasMany(ProductImage::class, 'product_id')->orderBy('sort_order');
+    }
 
     public function colors()
     {

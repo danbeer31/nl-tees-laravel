@@ -4,6 +4,7 @@
 
 @section('head')
     <meta name="csrf-token" content="{{ csrf_token() }}">
+
 @endsection
 
 @section('content')
@@ -119,8 +120,9 @@
             </div>
         </div>
     </div>
+    <script type="application/json" id="images-by-color">
+        {!! json_encode($imagesByColor, JSON_UNESCAPED_SLASHES) !!}
+    </script>
+    <script src="/public/js/shop/product/product-show.js?ti=2" defer></script>
 @endsection
 
-@push('scripts')
-    <script src="{{ asset('js/product-show.js') }}"></script>
-@endpush
